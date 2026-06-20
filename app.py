@@ -180,7 +180,7 @@ with st.expander("📝 Log Meal via AI", expanded=False):
         with st.spinner("Gemini is calculating macros..."):
             try:
                 # ENFORCE FORMATTING: First letter capital, rest small
-                clean_meal_text = meal_input.strip().capitalize()
+                clean_meal_text = meal_input.strip().title()
                 
                 res = client.models.generate_content(
                     model='gemini-2.5-flash',
