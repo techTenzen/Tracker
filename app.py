@@ -43,7 +43,7 @@ st.title("🥑 Pocket Health Tracker")
 # 1. Fetch Daily Progress from Airtable
 # ------------------------------------
 try:
-    url = f"https://api.airtable.com/v2/{BASE_ID}/Diet"
+    url = f"https://api.airtable.com/v0/{BASE_ID}/Diet"
     response = requests.get(url, headers=headers).json()
     
     today_cal, today_protein, today_carbs, today_fats = 0.0, 0.0, 0.0, 0.0
@@ -52,7 +52,6 @@ try:
         for record in response["records"]:
             fields = record.get("fields", {})
             ts = fields.get("Timestamp", "")
-            # Match records logged today
             if ts.startswith(today_str):
                 today_cal += float(fields.get("Calories", 0))
                 today_protein += float(fields.get("Protein", 0))
@@ -83,7 +82,6 @@ with st.form("meal_form", clear_on_submit=True):
     if submit_meal and meal_input:
         with st.spinner("Gemini is calculating macros..."):
             try:
-                # Prompt Gemini for exact macro mapping
                 res = client.models.generate_content(
                     model='gemini-2.5-flash',
                     contents=f"Analyze macros for this description: {meal_input}",
@@ -94,8 +92,6 @@ with st.form("meal_form", clear_on_submit=True):
                     ),
                 )
                 macros = json.loads(res.text)
-                
-                # Airtable Date-Time Format matching 12-hour display expectations
                 current_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                 
                 data = {
@@ -110,14 +106,14 @@ with st.form("meal_form", clear_on_submit=True):
                         }
                     }]
                 }
-                requests.post(f"https://api.airtable.com/v2/{BASE_ID}/Diet", headers=headers, json=data)
+                requests.post(f"https://api.airtable.com/v0/{BASE_ID}/Diet", headers=headers, json=data)
                 st.success(f"Added {macros['calories']:.1f} kcal successfully!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Error submitting meal: {e}")
 
 # ------------------------------------
-# 3. Log Weight Form (Diagnostic Version)
+# 3. Log Weight Form
 # ------------------------------------
 st.subheader("⚖️ Log Weight")
 with st.form("weight_form", clear_on_submit=True):
@@ -129,7 +125,6 @@ with st.form("weight_form", clear_on_submit=True):
             current_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
             formatted_weight = float(weight_input)
             
-            # The payload dictionary being transmitted
             data = {
                 "records": [{
                     "fields": {
@@ -139,16 +134,11 @@ with st.form("weight_form", clear_on_submit=True):
                 }]
             }
             
-            # Display exactly what we are sending right on the mobile screen
-            st.info(f"Sending to Airtable: {data}")
-            
-            res = requests.post(f"https://api.airtable.com/v2/{BASE_ID}/Weight", headers=headers, json=data)
-            response_json = res.json()
+            res = requests.post(f"https://api.airtable.com/v0/{BASE_ID}/Weight", headers=headers, json=data)
             
             if res.status_code in [200, 201]:
                 st.success(f"Logged weight: {formatted_weight:.2f} kg!")
-                # Show what Airtable replied with
-                st.json(response_json)
+                st.rerun()
             else:
                 st.error(f"Airtable Error ({res.status_code}): {res.text}")
         except Exception as e:
