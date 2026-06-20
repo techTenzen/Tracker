@@ -152,4 +152,4 @@ with st.form("weight_form", clear_on_submit=True):
             else:
                 st.error(f"Airtable Error ({res.status_code}): {res.text}")
         except Exception as e:
-            st.error(f"System Error: {e}")"Error saving weight: {e}")
+            st.error(f"System Error: {e}")
