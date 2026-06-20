@@ -3,6 +3,8 @@ import requests
 from datetime import datetime, timedelta
 import json
 from collections import Counter
+import altair as alt
+import pandas as pd
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -87,7 +89,6 @@ st.title("🥑 Pocket Health Tracker")
 @st.cache_data(ttl=60)
 def fetch_airtable_data(table_name):
     try:
-        # Fetching max 100 records for immediate processing performance
         url = f"https://api.airtable.com/v0/{BASE_ID}/{table_name}?maxRecords=100&sort[0][field]=Timestamp&sort[0][direction]=desc"
         res = requests.get(url, headers=headers).json()
         return res.get("records", [])
@@ -161,28 +162,29 @@ st.divider()
 repeated_foods = [food for food, count in Counter(food_history_pool).items() if count >= 3]
 
 with st.expander("📝 Log Meal via AI", expanded=False):
-    # Display historical quick shortcuts if matching conditions exist
     if repeated_foods:
         st.caption("⚡ Quick Log Favorites:")
         cols = st.columns(min(len(repeated_foods), 3))
-        selected_shortcut = ""
         for idx, food in enumerate(repeated_foods[:6]):
             col_target = cols[idx % 3]
+            # Keeps display compact but ensures value is parsed properly
             if col_target.button(f"➕ {food[:20]}", key=f"btn_{idx}"):
-                st.session_state["meal_text_input"] = food
+                st.session_state["meal_text_input"] = food.strip().capitalize()
                 st.rerun()
 
-    # Pre-fill area if quick-log button was clicked
     default_text = st.session_state.get("meal_text_input", "")
-    meal_input = st.text_area("What did you eat?", value=default_text, placeholder="e.g., 200g Grilled Chicken with White Rice")
-    submit_meal = st.form_submit_button("Log Meal") if 'meal_text_input' in st.session_state else st.button("Log Meal", key="main_meal_btn")
+    meal_input = st.text_area("What did you eat?", value=default_text, placeholder="e.g., 2 eggs, 2 parathas, and a cup of black coffee")
+    submit_meal = st.button("Log Meal", key="main_meal_btn")
     
     if submit_meal and meal_input:
         with st.spinner("Gemini is calculating macros..."):
             try:
+                # ENFORCE FORMATTING: First letter capital, rest small
+                clean_meal_text = meal_input.strip().capitalize()
+                
                 res = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=f"Analyze macros for this description: {meal_input}",
+                    contents=f"Analyze macros for this description: {clean_meal_text}",
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=MacroData,
@@ -196,7 +198,7 @@ with st.expander("📝 Log Meal via AI", expanded=False):
                     "records": [{
                         "fields": {
                             "Timestamp": current_time,
-                            "Food Items": meal_input,
+                            "Food Items": clean_meal_text,
                             "Calories": float(macros["calories"]),
                             "Protein": float(macros["protein"]),
                             "Carbs": float(macros["carbs"]),
@@ -243,7 +245,7 @@ st.divider()
 # ==========================================
 st.subheader("Analytics & Trends")
 
-# Parse historical Calorie totals by unique date
+# ---- 1. Process Calorie Data ----
 chart_diet_data = {}
 for record in reversed(diet_records):
     fields = record.get("fields", {})
@@ -254,9 +256,24 @@ for record in reversed(diet_records):
 
 if chart_diet_data:
     st.caption("🔥 Calorie Intake Trend (Daily Totals)")
-    st.bar_chart(chart_diet_data)
+    df_cal = pd.DataFrame(list(chart_diet_data.items()), columns=["Date", "Calories"]).sort_values("Date")
+    
+    cal_chart = alt.Chart(df_cal).mark_area(
+        line={'color':'#2ecc71', 'width': 2.5},
+        color=alt.Gradient(
+            gradient='linear',
+            stops=[alt.GradientStop(color='#2ecc71', offset=0),
+                   alt.GradientStop(color='rgba(46, 204, 113, 0)', offset=1)],
+            x1=1, y1=1, x2=1, y2=0
+        )
+    ).encode(
+        x=alt.X('Date:T', axis=alt.Axis(format='%b %d', labelAngle=-45, grid=False)),
+        y=alt.Y('Calories:Q', title="kcal", scale=alt.Scale(zero=False))
+    ).properties(height=200).configure_view(strokeOpacity=0)
+    
+    st.altair_chart(cal_chart, use_container_width=True)
 
-# Parse historical weight trend variations
+# ---- 2. Process Weight Data (Conditional Green/Red Stock Style) ----
 chart_weight_data = {}
 for record in reversed(weight_records):
     fields = record.get("fields", {})
@@ -267,7 +284,27 @@ for record in reversed(weight_records):
 
 if chart_weight_data:
     st.caption("⚖️ Body Weight Progression Trend (kg)")
-    st.line_chart(chart_weight_data)
+    df_weight = pd.DataFrame(list(chart_weight_data.items()), columns=["Date", "Weight"]).sort_values("Date")
+    
+    if len(df_weight) >= 2:
+        latest_w = df_weight["Weight"].iloc[-1]
+        previous_w = df_weight["Weight"].iloc[-2]
+        # Stock market logic: Dropping/maintaining weight is Green, increasing is Red
+        trend_color = "#2ecc71" if latest_w <= previous_w else "#e74c3c"
+    else:
+        trend_color = "#2ecc71"
+        
+    weight_chart = alt.Chart(df_weight).mark_line(
+        color=trend_color,
+        point=alt.OverlayMarkDef(color=trend_color, size=40, filled=True),
+        strokeWidth=3,
+        interpolate='monotone'
+    ).encode(
+        x=alt.X('Date:T', axis=alt.Axis(format='%b %d', labelAngle=-45, grid=False)),
+        y=alt.Y('Weight:Q', title="kg", scale=alt.Scale(zero=False))
+    ).properties(height=200).configure_view(strokeOpacity=0)
+    
+    st.altair_chart(weight_chart, use_container_width=True)
 
 st.divider()
 
@@ -276,7 +313,6 @@ st.divider()
 # ==========================================
 st.subheader("History Review")
 
-# Display Last Recorded Weight Marker
 if weight_records:
     latest_w = weight_records[0].get("fields", {}).get("Weight", "N/A")
     latest_w_ts = weight_records[0].get("fields", {}).get("Timestamp", "")
