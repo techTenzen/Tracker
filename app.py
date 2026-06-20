@@ -117,26 +117,39 @@ with st.form("meal_form", clear_on_submit=True):
                 st.error(f"Error submitting meal: {e}")
 
 # ------------------------------------
-# 3. Log Weight Form
+# 3. Log Weight Form (Diagnostic Version)
 # ------------------------------------
 st.subheader("⚖️ Log Weight")
 with st.form("weight_form", clear_on_submit=True):
     weight_input = st.number_input("Weight (kg)", min_value=10.0, max_value=250.0, step=0.05, format="%.2f")
     submit_weight = st.form_submit_button("Log Weight")
     
-    if submit_weight and weight_input > 0:
+    if submit_weight and weight_input > 10.0:
         try:
             current_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+            formatted_weight = float(weight_input)
+            
+            # The payload dictionary being transmitted
             data = {
                 "records": [{
                     "fields": {
                         "Timestamp": current_time,
-                        "Weight": float(weight_input)
+                        "Weight": formatted_weight
                     }
                 }]
             }
-            requests.post(f"https://api.airtable.com/v2/{BASE_ID}/Weight", headers=headers, json=data)
-            st.success(f"Logged weight: {weight_input:.2f} kg!")
-            st.rerun()
+            
+            # Display exactly what we are sending right on the mobile screen
+            st.info(f"Sending to Airtable: {data}")
+            
+            res = requests.post(f"https://api.airtable.com/v2/{BASE_ID}/Weight", headers=headers, json=data)
+            response_json = res.json()
+            
+            if res.status_code in [200, 201]:
+                st.success(f"Logged weight: {formatted_weight:.2f} kg!")
+                # Show what Airtable replied with
+                st.json(response_json)
+            else:
+                st.error(f"Airtable Error ({res.status_code}): {res.text}")
         except Exception as e:
-            st.error(f"Error saving weight: {e}")
+            st.error(f"System Error: {e}")"Error saving weight: {e}")
