@@ -183,13 +183,33 @@ carb_color = get_status_color(today_carbs, **THRESHOLDS["Carbs"])
 fat_color = get_status_color(today_fats, **THRESHOLDS["Fats"])
 prot_color = get_status_color(today_protein, **THRESHOLDS["Protein"])
 
-# Inject borders matching status criteria dynamically
+# Force explicit background tint and text glow matching status criteria
 st.markdown(f"""
     <style>
-    div[data-testid="stMetric"]:nth-of-type(1) {{ border-color: {cal_color} !important; }}
-    div[data-testid="stMetric"]:nth-of-type(2) {{ border-color: {carb_color} !important; }}
-    div[data-testid="stMetric"]:nth-of-type(3) {{ border-color: {prot_color} !important; }}
-    div[data-testid="stMetric"]:nth-of-type(4) {{ border-color: {fat_color} !important; }}
+    /* Target the metric containers sequentially and force style states */
+    div[data-testid="stMetricBlock"]:nth-of-type(1) {{
+        background-color: {cal_color}22 !important; /* Adding '22' makes the background a light tint */
+        border: 2px solid {cal_color} !important;
+    }}
+    div[data-testid="stMetricBlock"]:nth-of-type(2) {{
+        background-color: {carb_color}22 !important;
+        border: 2px solid {carb_color} !important;
+    }}
+    div[data-testid="stMetricBlock"]:nth-of-type(3) {{
+        background-color: {prot_color}22 !important;
+        border: 2px solid {prot_color} !important;
+    }}
+    div[data-testid="stMetricBlock"]:nth-of-type(4) {{
+        background-color: {fat_color}22 !important;
+        border: 2px solid {fat_color} !important;
+    }}
+    
+    /* Make the metric labels and values high-contrast dark text over the tinted backgrounds */
+    div[data-testid="stMetric"] label, 
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
+        color: var(--text-color) !important;
+        text-shadow: 0px 0px 1px rgba(0,0,0,0.1);
+    }}
     </style>
 """, unsafe_allow_html=True)
 
@@ -200,8 +220,6 @@ with col1:
 with col2:
     st.metric("💪 Protein", f"{today_protein:.1f}g")
     st.metric("🥑 Fats", f"{today_fats:.1f}g")
-
-st.divider()
 
 # ==========================================
 # 5. INPUT DRAWERS (MEALS / WEIGHT / MOMENTS)
