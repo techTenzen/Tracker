@@ -1,83 +1,181 @@
 import streamlit as st
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+from collections import Counter
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-# Page Config
+# ==========================================
+# 1. PAGE SETUP & ADAPTIVE STYLING
+# ==========================================
 st.set_page_config(page_title="Pocket Health Tracker", page_icon="🥑", layout="centered")
 
-# Custom UI Styling for clean mobile look
+# Custom UI CSS supporting adaptive Light/Dark typography and styling
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; background-color: #4CAF50; color: white; }
-    .stMetric { background-color: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #e9ecef; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    
+    /* Apply clean typography across components */
+    html, body, [class*="css"], .stMarkdown {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    /* High-contrast adaptive metric containers */
+    div[data-testid="stMetric"] {
+        background-color: var(--background-color);
+        border: 1px solid var(--text-color);
+        opacity: 0.85;
+        padding: 14px;
+        border-radius: 12px;
+        box-shadow: 0px 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    /* Ensure metric values and labels explicitly reference theme text colors */
+    div[data-testid="stMetric"] label, 
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: var(--text-color) !important;
+        font-weight: 700;
+    }
+    
+    /* Styled CTA Submit Buttons */
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: 600;
+        height: 3em;
+        background-color: #2ecc71 !important;
+        color: white !important;
+        border: none;
+        transition: transform 0.1s ease;
+    }
+    .stButton>button:active { transform: scale(0.98); }
+    
+    /* Quick Log Button Pill Designs */
+    div.stActionButton > button {
+        border-radius: 20px !important;
+        padding: 4px 12px !important;
+        font-size: 13px !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# Strict Schema for Gemini AI breakdown
+# Schema for Gemini AI structural mapping
 class MacroData(BaseModel):
     calories: float = Field(description="Total energy value in kcal")
     protein: float = Field(description="Protein content in grams")
     carbs: float = Field(description="Carbohydrates content in grams")
     fats: float = Field(description="Fats content in grams")
 
-# Airtable Configurations from Streamlit Secrets
+# Fetch Core Airtable Secrets
 AIRTABLE_TOKEN = st.secrets["AIRTABLE_TOKEN"]
 BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
-
 headers = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
     "Content-Type": "application/json"
 }
 
-# Initialize modern Gemini client
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 today_str = datetime.now().strftime("%Y-%m-%d")
 
 st.title("🥑 Pocket Health Tracker")
 
-# ------------------------------------
-# 1. Fetch Daily Progress from Airtable
-# ------------------------------------
-try:
-    url = f"https://api.airtable.com/v0/{BASE_ID}/Diet"
-    response = requests.get(url, headers=headers).json()
+# ==========================================
+# 2. DATA ACQUISITION & PROCESSING PIPELINE
+# ==========================================
+@st.cache_data(ttl=60)
+def fetch_airtable_data(table_name):
+    try:
+        # Fetching max 100 records for immediate processing performance
+        url = f"https://api.airtable.com/v0/{BASE_ID}/{table_name}?maxRecords=100&sort[0][field]=Timestamp&sort[0][direction]=desc"
+        res = requests.get(url, headers=headers).json()
+        return res.get("records", [])
+    except Exception:
+        return []
+
+diet_records = fetch_airtable_data("Diet")
+weight_records = fetch_airtable_data("Weight")
+
+# Parse Daily Metric Totals
+today_cal, today_protein, today_carbs, today_fats = 0.0, 0.0, 0.0, 0.0
+food_history_pool = []
+logged_dates = set()
+
+for record in diet_records:
+    fields = record.get("fields", {})
+    ts = fields.get("Timestamp", "")
+    food_item = fields.get("Food Items", "")
     
-    today_cal, today_protein, today_carbs, today_fats = 0.0, 0.0, 0.0, 0.0
-    
-    if "records" in response:
-        for record in response["records"]:
-            fields = record.get("fields", {})
-            ts = fields.get("Timestamp", "")
+    if food_item:
+        food_history_pool.append(food_item.strip())
+        
+    if ts:
+        try:
+            date_part = ts.split(" ")[0]
+            logged_dates.add(date_part)
             if ts.startswith(today_str):
                 today_cal += float(fields.get("Calories", 0))
                 today_protein += float(fields.get("Protein", 0))
                 today_carbs += float(fields.get("Carbs", 0))
                 today_fats += float(fields.get("Fats", 0))
+        except ValueError:
+            continue
 
-    st.subheader("Today's Progress")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("🔥 Calories", f"{today_cal:.1f} kcal")
-        st.metric("🍞 Carbs", f"{today_carbs:.1f}g")
-    with col2:
-        st.metric("💪 Protein", f"{today_protein:.1f}g")
-        st.metric("🥑 Fats", f"{today_fats:.1f}g")
-except Exception:
-    st.info("Log your meals below to view your daily total breakdowns!")
+for record in weight_records:
+    fields = record.get("fields", {})
+    ts = fields.get("Timestamp", "")
+    if ts:
+        logged_dates.add(ts.split(" ")[0])
+
+# Calculate Consistency Streak Counters
+streak = 0
+check_date = datetime.now()
+while check_date.strftime("%Y-%m-%d") in logged_dates:
+    streak += 1
+    check_date -= timedelta(days=1)
+
+# Display Streak Badge
+if streak > 0:
+    st.markdown(f"🔥 **{streak} Day Consistency Streak!** Keep grinding.")
+
+# ==========================================
+# 3. METRIC DASHBOARD OVERVIEW
+# ==========================================
+st.subheader("Today's Progress")
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("🔥 Calories", f"{today_cal:.1f} kcal")
+    st.metric("🍞 Carbs", f"{today_carbs:.1f}g")
+with col2:
+    st.metric("💪 Protein", f"{today_protein:.1f}g")
+    st.metric("🥑 Fats", f"{today_fats:.1f}g")
 
 st.divider()
 
-# ------------------------------------
-# 2. Log Meal Form
-# ------------------------------------
-st.subheader("📝 Log Meal via AI")
-with st.form("meal_form", clear_on_submit=True):
-    meal_input = st.text_area("What did you eat?", placeholder="e.g., 2 eggs, 2 parathas, and a cup of black coffee")
-    submit_meal = st.form_submit_button("Log Meal")
+# ==========================================
+# 4. COLLAPSIBLE DATA CAPTURE DRAWERS
+# ==========================================
+
+# Dynamic Quick Logs Evaluation
+repeated_foods = [food for food, count in Counter(food_history_pool).items() if count >= 3]
+
+with st.expander("📝 Log Meal via AI", expanded=False):
+    # Display historical quick shortcuts if matching conditions exist
+    if repeated_foods:
+        st.caption("⚡ Quick Log Favorites:")
+        cols = st.columns(min(len(repeated_foods), 3))
+        selected_shortcut = ""
+        for idx, food in enumerate(repeated_foods[:6]):
+            col_target = cols[idx % 3]
+            if col_target.button(f"➕ {food[:20]}", key=f"btn_{idx}"):
+                st.session_state["meal_text_input"] = food
+                st.rerun()
+
+    # Pre-fill area if quick-log button was clicked
+    default_text = st.session_state.get("meal_text_input", "")
+    meal_input = st.text_area("What did you eat?", value=default_text, placeholder="e.g., 200g Grilled Chicken with White Rice")
+    submit_meal = st.form_submit_button("Log Meal") if 'meal_text_input' in st.session_state else st.button("Log Meal", key="main_meal_btn")
     
     if submit_meal and meal_input:
         with st.spinner("Gemini is calculating macros..."):
@@ -107,39 +205,101 @@ with st.form("meal_form", clear_on_submit=True):
                     }]
                 }
                 requests.post(f"https://api.airtable.com/v0/{BASE_ID}/Diet", headers=headers, json=data)
+                if "meal_text_input" in st.session_state:
+                    del st.session_state["meal_text_input"]
                 st.success(f"Added {macros['calories']:.1f} kcal successfully!")
+                st.cache_data.clear()
                 st.rerun()
             except Exception as e:
-                st.error(f"Error submitting meal: {e}")
+                st.error(f"Error parsing entry: {e}")
 
-# ------------------------------------
-# 3. Log Weight Form
-# ------------------------------------
-st.subheader("⚖️ Log Weight")
-with st.form("weight_form", clear_on_submit=True):
-    weight_input = st.number_input("Weight (kg)", min_value=10.0, max_value=250.0, step=0.05, format="%.2f")
-    submit_weight = st.form_submit_button("Log Weight")
-    
-    if submit_weight and weight_input > 10.0:
-        try:
-            current_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
-            formatted_weight = float(weight_input)
-            
-            data = {
-                "records": [{
-                    "fields": {
-                        "Timestamp": current_time,
-                        "Weight": formatted_weight
-                    }
-                }]
-            }
-            
-            res = requests.post(f"https://api.airtable.com/v0/{BASE_ID}/Weight", headers=headers, json=data)
-            
-            if res.status_code in [200, 201]:
-                st.success(f"Logged weight: {formatted_weight:.2f} kg!")
+with st.expander("⚖️ Log Weight Metric", expanded=False):
+    with st.form("weight_form", clear_on_submit=True):
+        weight_input = st.number_input("Weight (kg)", min_value=10.0, max_value=250.0, step=0.05, format="%.2f")
+        submit_weight = st.form_submit_button("Log Weight")
+        
+        if submit_weight and weight_input > 10.0:
+            try:
+                current_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+                data = {
+                    "records": [{
+                        "fields": {
+                            "Timestamp": current_time,
+                            "Weight": float(weight_input)
+                        }
+                    }]
+                }
+                requests.post(f"https://api.airtable.com/v0/{BASE_ID}/Weight", headers=headers, json=data)
+                st.success(f"Logged weight: {weight_input:.2f} kg!")
+                st.cache_data.clear()
                 st.rerun()
-            else:
-                st.error(f"Airtable Error ({res.status_code}): {res.text}")
-        except Exception as e:
-            st.error(f"System Error: {e}")
+            except Exception as e:
+                st.error(f"System Error: {e}")
+
+st.divider()
+
+# ==========================================
+# 5. DATA VISUALIZATION TREND CHARTS
+# ==========================================
+st.subheader("Analytics & Trends")
+
+# Parse historical Calorie totals by unique date
+chart_diet_data = {}
+for record in reversed(diet_records):
+    fields = record.get("fields", {})
+    ts = fields.get("Timestamp", "")
+    if ts:
+        d_str = ts.split(" ")[0]
+        chart_diet_data[d_str] = chart_diet_data.get(d_str, 0.0) + float(fields.get("Calories", 0))
+
+if chart_diet_data:
+    st.caption("🔥 Calorie Intake Trend (Daily Totals)")
+    st.bar_chart(chart_diet_data)
+
+# Parse historical weight trend variations
+chart_weight_data = {}
+for record in reversed(weight_records):
+    fields = record.get("fields", {})
+    ts = fields.get("Timestamp", "")
+    if ts:
+        w_str = ts.split(" ")[0]
+        chart_weight_data[w_str] = float(fields.get("Weight", 0))
+
+if chart_weight_data:
+    st.caption("⚖️ Body Weight Progression Trend (kg)")
+    st.line_chart(chart_weight_data)
+
+st.divider()
+
+# ==========================================
+# 6. HISTORICAL LOGS REVIEW (PAST 3 DAYS)
+# ==========================================
+st.subheader("History Review")
+
+# Display Last Recorded Weight Marker
+if weight_records:
+    latest_w = weight_records[0].get("fields", {}).get("Weight", "N/A")
+    latest_w_ts = weight_records[0].get("fields", {}).get("Timestamp", "")
+    st.info(f"**Last Logged Weight:** {latest_w} kg ({latest_w_ts})")
+
+st.caption("📋 Diet Entries (Last 3 Days Tracking Window)")
+three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+
+recent_entries = []
+for record in diet_records:
+    fields = record.get("fields", {})
+    ts = fields.get("Timestamp", "")
+    if ts and ts.split(" ")[0] >= three_days_ago:
+        recent_entries.append({
+            "Time": ts,
+            "Food": fields.get("Food Items", ""),
+            "Cals": f"{float(fields.get('Calories', 0)):.1f}",
+            "P": f"{float(fields.get('Protein', 0)):.1f}g",
+            "C": f"{float(fields.get('Carbs', 0)):.1f}g",
+            "F": f"{float(fields.get('Fats', 0)):.1f}g"
+        })
+
+if recent_entries:
+    st.dataframe(recent_entries, use_container_width=True, hide_index=True)
+else:
+    st.write("No meals tracked within the last 3 days.")
